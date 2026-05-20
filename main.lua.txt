@@ -1,0 +1,600 @@
+-- ============================================================
+--  ESQUELETO QUADRADO — LÖVE2D (Lua)
+--  Requer: LÖVE 11.x  →  https://love2d.org
+--  Rodar:  love .   (dentro da pasta com este main.lua)
+-- ============================================================
+
+-- ────────────────────────────────────────────────────────────
+-- PALETA DE CORES
+-- ────────────────────────────────────────────────────────────
+local C = {
+    bone        = {212/255, 201/255, 168/255},
+    bone_dark   = {176/255, 164/255, 126/255},
+    bone_shadow = {122/255, 111/255,  82/255},
+    bone_light  = {237/255, 229/255, 204/255},
+    crack       = {107/255,  95/255,  62/255},
+    marrow      = {201/255, 168/255, 122/255},
+    void        = {  0/255,   0/255,   0/255},
+    depth1      = {  5/255,   5/255,   8/255},
+    depth2      = {  8/255,   8/255,  16/255},
+    depth3      = { 13/255,  13/255,  26/255},
+    depth4      = { 18/255,  18/255,  37/255},
+    depth5      = { 26/255,  26/255,  53/255},
+    bg          = { 13/255,  11/255,   8/255},
+    bg2         = { 22/255,  18/255,  12/255},
+}
+
+-- ────────────────────────────────────────────────────────────
+-- ESTADO GLOBAL
+-- ────────────────────────────────────────────────────────────
+local t       = 0          -- tempo acumulado
+local ox, oy  = 0, 0       -- offset de flutuação
+local breathe = 1          -- fator de respiração
+
+-- ────────────────────────────────────────────────────────────
+-- UTILITÁRIOS DE DESENHO
+-- ────────────────────────────────────────────────────────────
+local function setColor(c, alpha)
+    love.graphics.setColor(c[1], c[2], c[3], alpha or 1)
+end
+
+-- Retângulo com cantos arredondados + gradiente vertical simulado
+local function roundRect(x, y, w, h, rx, ry, topC, botC, alpha)
+    rx = rx or 4; ry = ry or rx; alpha = alpha or 1
+    local steps = 12
+    for i = 0, steps - 1 do
+        local f  = i / (steps - 1)
+        local r  = topC[1] + (botC[1] - topC[1]) * f
+        local g  = topC[2] + (botC[2] - topC[2]) * f
+        local b  = topC[3] + (botC[3] - topC[3]) * f
+        love.graphics.setColor(r, g, b, alpha)
+        local sy = y + (h / steps) * i
+        local sh = h / steps + 1
+        -- clamp corners apenas no primeiro e último strip
+        if i == 0 then
+            love.graphics.rectangle("fill", x + rx, sy, w - 2*rx, sh)
+            love.graphics.rectangle("fill", x, sy + ry, w, sh - ry)
+        elseif i == steps - 1 then
+            love.graphics.rectangle("fill", x + rx, sy, w - 2*rx, sh)
+            love.graphics.rectangle("fill", x, sy, w, sh - ry)
+        else
+            love.graphics.rectangle("fill", x, sy, w, sh)
+        end
+    end
+    -- arcos dos cantos
+    love.graphics.setColor(topC[1], topC[2], topC[3], alpha)
+    love.graphics.arc("fill", x + rx,     y + ry,     rx, math.pi,   3*math.pi/2)
+    love.graphics.arc("fill", x + w - rx, y + ry,     rx, 3*math.pi/2, 2*math.pi)
+    love.graphics.setColor(botC[1], botC[2], botC[3], alpha)
+    love.graphics.arc("fill", x + rx,     y + h - ry, rx, math.pi/2, math.pi)
+    love.graphics.arc("fill", x + w - rx, y + h - ry, rx, 0,         math.pi/2)
+end
+
+-- Elipse sólida colorida
+local function ellipse(x, y, rx, ry, c, alpha)
+    setColor(c, alpha or 1)
+    love.graphics.ellipse("fill", x, y, rx, ry)
+end
+
+-- Linha com espessura
+local function thickLine(x1,y1,x2,y2, w, c, alpha)
+    setColor(c, alpha or 1)
+    love.graphics.setLineWidth(w)
+    love.graphics.line(x1,y1,x2,y2)
+    love.graphics.setLineWidth(1)
+end
+
+-- ────────────────────────────────────────────────────────────
+-- COMPONENTES DO ESQUELETO
+-- (cx, cy) = centro do topo do componente
+-- ────────────────────────────────────────────────────────────
+
+-- ── PROFUNDIDADE ABISSAL (órbitas e boca) ──────────────────
+local function drawAbyss(x, y, w, h, rx)
+    rx = rx or 6
+    -- 5 camadas de escuridão, cada uma menor
+    local layers = { C.depth5, C.depth4, C.depth3, C.depth2, C.depth1, C.void }
+    for i, col in ipairs(layers) do
+        local f  = (i - 1) / (#layers - 1)
+        local lx = x + w * f * 0.22
+        local ly = y + h * f * 0.22
+        local lw = w * (1 - f * 0.44)
+        local lh = h * (1 - f * 0.44)
+        setColor(col)
+        love.graphics.rectangle("fill", lx, ly, lw, lh, rx * (1-f*0.5))
+    end
+    -- ponto de fuga central
+    setColor(C.void)
+    love.graphics.ellipse("fill", x + w/2, y + h/2, w*0.18, h*0.18)
+    -- reflexo fantasmagórico
+    love.graphics.setColor(1, 1, 0.9, 0.04)
+    love.graphics.ellipse("fill", x + w*0.35, y + h*0.28, w*0.22, h*0.14)
+end
+
+-- ── CRÂNIO ──────────────────────────────────────────────────
+local function drawSkull(cx, cy)
+    local W, H = 260, 210
+    local x = cx - W/2
+    local y = cy
+
+    -- corpo principal
+    roundRect(x, y, W, H, 18, 18, C.bone_light, C.bone_shadow)
+
+    -- sombra interna inferior
+    love.graphics.setColor(0, 0, 0, 0.3)
+    love.graphics.rectangle("fill", x+10, y+H-40, W-20, 35, 8)
+
+    -- destaque superior
+    love.graphics.setColor(1, 1, 0.95, 0.12)
+    love.graphics.rectangle("fill", x+20, y+8, W-40, 18, 6)
+
+    -- crista frontal
+    roundRect(x + W/2 - 100, y + 50, 200, 14, 3, 3, C.bone_light, C.bone_dark)
+
+    -- zigomas
+    for _, side in ipairs({{x+8, -8}, {x+W-53, 8}}) do
+        love.graphics.push()
+        love.graphics.translate(side[1] + 22, y + H - 70)
+        love.graphics.rotate(math.rad(side[2]))
+        ellipse(0, 0, 22, 11, C.bone)
+        love.graphics.setColor(1,1,0.9,0.15)
+        love.graphics.ellipse("fill", -4, -3, 10, 6)
+        love.graphics.pop()
+    end
+
+    -- sutura sagital
+    for i = 0, 7 do
+        setColor(C.crack, 0.35)
+        love.graphics.rectangle("fill", cx - 1, y + 14 + i*10, 3, 6, 1)
+    end
+    -- sutura coronal
+    for i = 0, 13 do
+        local px = cx - 70 + i * 10
+        setColor(C.crack, 0.3)
+        if i % 3 ~= 2 then
+            love.graphics.rectangle("fill", px, y + 22, 6, 2, 1)
+        end
+    end
+
+    -- rachaduras
+    love.graphics.setColor(C.crack[1], C.crack[2], C.crack[3], 0.38)
+    love.graphics.setLineWidth(1)
+    love.graphics.line(x+55, y+70, x+58, y+90, x+56, y+105)
+    love.graphics.line(x+W-70, y+40, x+W-67, y+60, x+W-65, y+68)
+    love.graphics.line(x+W-50, y+80, x+W-48, y+95)
+    love.graphics.setLineWidth(1)
+
+    -- manchas de envelhecimento
+    love.graphics.setColor(C.bone_shadow[1], C.bone_shadow[2], C.bone_shadow[3], 0.12)
+    love.graphics.ellipse("fill", x+80, y+60, 15, 10)
+    love.graphics.ellipse("fill", x+W-75, y+120, 10, 8)
+
+    -- ── ÓRBITAS ──
+    for _, side in ipairs({{x+22, "L"}, {x+W-22-80, "R"}}) do
+        local ox2 = side[1]
+        local oy2 = y + 55
+        local ow, oh = 80, 68
+
+        -- borda óssea (supraorbital)
+        roundRect(ox2, oy2 - 8, ow, 14, 6, 4, C.bone_light, C.bone_dark)
+
+        -- aro da órbita
+        roundRect(ox2, oy2, ow, oh, 10, 10, C.bone, C.bone_shadow)
+        love.graphics.setColor(1,1,0.9,0.18)
+        love.graphics.rectangle("fill", ox2+6, oy2+4, ow-12, 10, 4)
+
+        -- abismo da órbita
+        drawAbyss(ox2+5, oy2+5, ow-10, oh-10, 8)
+
+        -- borda infraorbital
+        roundRect(ox2+10, oy2+oh-2, ow-20, 10, 5, 3, C.bone_dark, C.bone)
+    end
+
+    -- ── CAVIDADE NASAL ──
+    local nx, ny = cx - 22, y + 105
+    roundRect(nx, ny, 44, 38, 6, 6, C.depth3, C.void)
+    -- septo
+    love.graphics.setColor(C.bone_shadow[1], C.bone_shadow[2], C.bone_shadow[3], 0.6)
+    love.graphics.rectangle("fill", cx - 2, ny + 4, 4, 28, 2)
+    -- profundidade interna
+    drawAbyss(nx+4, ny+4, 36, 30, 5)
+
+    -- ── DENTES SUPERIORES ──
+    local toothW = 24
+    local teethX = cx - 4 * toothW - 4
+    for i = 0, 7 do
+        local tx = teethX + i * (toothW + 2)
+        local ty = y + H - 62
+        roundRect(tx, ty, toothW, 18, 2, 3, C.bone_light, C.bone_dark)
+        -- sulco de luz
+        love.graphics.setColor(1,1,0.9,0.18)
+        love.graphics.rectangle("fill", tx+6, ty+2, 2, 12, 1)
+        -- racha em alguns
+        if i == 2 or i == 6 then
+            love.graphics.setColor(C.crack[1], C.crack[2], C.crack[3], 0.5)
+            love.graphics.setLineWidth(1)
+            love.graphics.line(tx+toothW*0.45, ty+2, tx+toothW*0.42, ty+14)
+            love.graphics.setLineWidth(1)
+        end
+    end
+
+    -- ── ABERTURA DA BOCA (PROFUNDIDADE ABISSAL) ──
+    local mx, my = cx - 100, y + H - 52
+    local mw, mh = 200, 38
+    roundRect(mx, my, mw, mh, 4, 8, C.depth1, C.void)
+    drawAbyss(mx+4, my+2, mw-8, mh-4, 3)
+
+    -- ── MAXILAR / MANDÍBULA ──
+    roundRect(x, y+H-30, W, 30, 0, 8, C.bone_shadow, C.bone)
+    love.graphics.setColor(1,1,0.9,0.12)
+    love.graphics.rectangle("fill", x+10, y+H-28, W-20, 8, 3)
+
+    -- ── DENTES INFERIORES ──
+    for i = 0, 7 do
+        local tx = teethX + i * (toothW + 2)
+        local ty = y + H - 30
+        roundRect(tx, ty, toothW, 14, 2, 3, C.bone_dark, C.bone_light)
+        love.graphics.setColor(1,1,0.9,0.15)
+        love.graphics.rectangle("fill", tx+6, ty+2, 2, 9, 1)
+        if i == 1 or i == 5 then
+            love.graphics.setColor(C.crack[1], C.crack[2], C.crack[3], 0.5)
+            love.graphics.setLineWidth(1)
+            love.graphics.line(tx+toothW*0.5, ty+2, tx+toothW*0.48, ty+11)
+            love.graphics.setLineWidth(1)
+        end
+    end
+end
+
+-- ── VÉRTEBRA ────────────────────────────────────────────────
+local function drawVertebra(cx, cy, w, h)
+    local x = cx - w/2
+    -- processo transverso
+    roundRect(x - 12, cy + h/2 - 4, w + 24, 8, 4, 4, C.bone_dark, C.bone_shadow)
+    -- corpo
+    roundRect(x, cy, w, h, 4, 4, C.bone_light, C.bone_shadow)
+    love.graphics.setColor(1,1,0.9,0.15)
+    love.graphics.rectangle("fill", x+4, cy+3, w-8, 6, 2)
+    -- processo espinhoso
+    roundRect(cx - 10, cy - 7, 20, 8, 3, 3, C.bone_dark, C.bone)
+end
+
+-- disco intervertebral
+local function drawDisc(cx, cy, w)
+    local x = cx - w/2
+    roundRect(x, cy, w, 6, 3, 3, C.bone_shadow, C.marrow)
+    love.graphics.setColor(C.bone_light[1], C.bone_light[2], C.bone_light[3], 0.2)
+    love.graphics.ellipse("fill", cx, cy+3, w*0.3, 2)
+end
+
+-- ── PESCOÇO ─────────────────────────────────────────────────
+local function drawNeck(cx, cy)
+    local vw, vh = 100, 22
+    local positions = {0, 30, 60}
+    for i, dy in ipairs(positions) do
+        drawVertebra(cx, cy + dy, vw - (i-1)*5, vh)
+        if i < #positions then
+            drawDisc(cx, cy + dy + vh, vw - (i-1)*5 - 5)
+        end
+    end
+    return cy + 88
+end
+
+-- ── COSTELA ─────────────────────────────────────────────────
+local function drawRib(cx, cy, side, len, angle, idx)
+    love.graphics.push()
+    love.graphics.translate(cx, cy)
+    love.graphics.rotate(math.rad(angle))
+    -- corpo da costela
+    local dir = (side == "L") and -1 or 1
+    roundRect(0, -7, len * dir, 14, 7, 7, C.bone_light, C.bone_shadow)
+    -- sulco superior
+    love.graphics.setColor(1,1,0.9,0.12)
+    love.graphics.rectangle("fill", 3*dir, -5, (len-10)*dir, 3, 2)
+    love.graphics.pop()
+end
+
+-- ── TÓRAX ───────────────────────────────────────────────────
+local function drawTorso(cx, cy)
+    local ribAngles = {-12, -9, -6, -3, 1, 4}
+    local ribLens   = {120, 122, 120, 116, 108, 96}
+    local H = #ribAngles * 30
+
+    -- escápulas (sombra atrás)
+    love.graphics.setColor(C.bone_shadow[1], C.bone_shadow[2], C.bone_shadow[3], 0.18)
+    love.graphics.ellipse("fill", cx - 120, cy + 40, 35, 50)
+    love.graphics.ellipse("fill", cx + 120, cy + 40, 35, 50)
+
+    -- clavículas
+    for _, s in ipairs({{-1, -12}, {1, 12}}) do
+        local dir = s[1]
+        love.graphics.push()
+        love.graphics.translate(cx + dir * 20, cy - 10)
+        love.graphics.rotate(math.rad(s[2]))
+        roundRect(0, -6, 110 * dir, 12, 6, 6, C.bone_light, C.bone_shadow)
+        love.graphics.pop()
+    end
+
+    -- costelas
+    for i, ang in ipairs(ribAngles) do
+        local ry = cy + (i-1) * 30
+        drawRib(cx - 12, ry, "L", ribLens[i], ang,   i)
+        drawRib(cx + 12, ry, "R", ribLens[i], -ang,  i)
+    end
+
+    -- esterno
+    roundRect(cx - 12, cy - 5, 24, H + 10, 4, 4, C.bone_light, C.bone_dark)
+    love.graphics.setColor(1,1,0.9,0.15)
+    love.graphics.rectangle("fill", cx-5, cy, 4, H, 2)
+    love.graphics.setColor(0,0,0,0.2)
+    love.graphics.rectangle("fill", cx+4, cy, 4, H, 2)
+
+    -- coluna torácica
+    for i = 0, 5 do
+        local vy = cy + i * 30
+        setColor(C.bone_light)
+        love.graphics.rectangle("fill", cx - 9, vy, 18, 22, 3)
+        setColor(C.bone_shadow)
+        love.graphics.rectangle("fill", cx - 9, vy + 22, 18, 6, 2)
+        love.graphics.setColor(1,1,0.9,0.12)
+        love.graphics.rectangle("fill", cx-6, vy+2, 5, 10, 2)
+    end
+
+    return cy + H + 10
+end
+
+-- ── ARTICULAÇÃO (genérica) ───────────────────────────────────
+local function drawJoint(cx, cy, w, h, topC, botC)
+    roundRect(cx - w/2, cy, w, h, w/4, w/4, topC or C.bone_light, botC or C.bone_shadow)
+    love.graphics.setColor(1,1,0.9,0.2)
+    love.graphics.ellipse("fill", cx, cy + h*0.35, w*0.3, h*0.2)
+end
+
+-- ── BRAÇO ───────────────────────────────────────────────────
+local function drawArm(cx, cy, side)
+    local dir = (side == "L") and -1 or 1
+
+    -- articulação do ombro
+    drawJoint(cx, cy - 15, 30, 30, C.bone_light, C.bone_shadow)
+    love.graphics.setColor(1,1,0.9,0.25)
+    love.graphics.ellipse("fill", cx - 3*dir, cy - 6, 6, 4)
+
+    -- úmero
+    roundRect(cx - 13, cy + 16, 26, 130, 8, 8, C.bone_light, C.bone_shadow)
+    -- rugosidade deltóide
+    love.graphics.setColor(C.bone_shadow[1], C.bone_shadow[2], C.bone_shadow[3], 0.4)
+    love.graphics.rectangle("fill", cx + 5*dir, cy + 50, 5, 20, 2)
+    -- brilho
+    love.graphics.setColor(1,1,0.9,0.15)
+    love.graphics.rectangle("fill", cx - 8, cy + 20, 5, 60, 2)
+
+    -- cotovelo
+    drawJoint(cx, cy + 148, 32, 18, C.bone_light, C.bone_dark)
+    -- olécrano
+    love.graphics.setColor(C.bone_shadow[1], C.bone_shadow[2], C.bone_shadow[3], 0.7)
+    love.graphics.ellipse("fill", cx, cy + 152, 5, 4)
+
+    -- rádio e ulna
+    roundRect(cx - 13, cy + 168, 13, 110, 4, 4, C.bone, C.bone_shadow)
+    roundRect(cx + 0,  cy + 168, 11, 110, 4, 4, C.bone_light, C.bone_dark)
+    -- membrana interóssea
+    love.graphics.setColor(C.bone_shadow[1], C.bone_shadow[2], C.bone_shadow[3], 0.2)
+    for i = 0, 8 do
+        love.graphics.rectangle("fill", cx-1, cy+170+i*12, 2, 8, 1)
+    end
+
+    -- pulso
+    roundRect(cx - 17, cy + 280, 34, 14, 4, 4, C.bone_dark, C.bone)
+
+    -- mão
+    roundRect(cx - 23, cy + 295, 46, 50, 4, 4, C.bone, C.bone_shadow)
+    -- metacarpos
+    for i = 0, 3 do
+        love.graphics.setColor(C.bone_shadow[1], C.bone_shadow[2], C.bone_shadow[3], 0.3)
+        love.graphics.rectangle("fill", cx - 18 + i*12, cy+300, 2, 30, 1)
+    end
+    love.graphics.setColor(1,1,0.9,0.12)
+    love.graphics.rectangle("fill", cx-18, cy+298, 36, 6, 2)
+
+    -- dedos
+    for i = 0, 3 do
+        local fx = cx - 18 + i * 12
+        roundRect(fx, cy + 346, 10, 24, 2, 3, C.bone, C.bone_shadow)
+        -- falange média
+        roundRect(fx, cy + 372, 10, 18, 2, 3, C.bone_dark, C.bone_shadow)
+        -- falange distal
+        roundRect(fx, cy + 392, 10, 14, 2, 4, C.bone, C.bone_shadow)
+        -- articulações
+        love.graphics.setColor(1,1,0.9,0.2)
+        love.graphics.ellipse("fill", fx+5, cy+370, 4, 3)
+        love.graphics.ellipse("fill", fx+5, cy+390, 4, 3)
+    end
+end
+
+-- ── PELVE ───────────────────────────────────────────────────
+local function drawPelvis(cx, cy)
+    local W, H = 260, 90
+
+    -- ilíaco principal
+    roundRect(cx - W/2, cy, W, H, 8, 8, C.bone, C.bone_shadow)
+    love.graphics.setColor(1,1,0.9,0.15)
+    love.graphics.rectangle("fill", cx-W/2+15, cy+6, W-30, 12, 4)
+
+    -- forame obturador esquerdo
+    drawAbyss(cx - W/2 + 25, cy + 25, 70, 40, 14)
+    -- forame obturador direito
+    drawAbyss(cx + W/2 - 95, cy + 25, 70, 40, 14)
+
+    -- sacro
+    roundRect(cx - 25, cy + 5, 50, H - 8, 4, 4, C.bone_light, C.bone_dark)
+    -- foramina do sacro (4 pares de furinhos)
+    for i = 0, 3 do
+        for _, sx in ipairs({cx-12, cx+3}) do
+            drawAbyss(sx, cy + 18 + i*16, 9, 9, 3)
+        end
+    end
+    love.graphics.setColor(1,1,0.9,0.15)
+    love.graphics.rectangle("fill", cx-6, cy+8, 5, H-20, 2)
+end
+
+-- ── PERNA ───────────────────────────────────────────────────
+local function drawLeg(cx, cy)
+    -- cabeça do fêmur
+    love.graphics.setColor(C.bone_light[1], C.bone_light[2], C.bone_light[3])
+    love.graphics.ellipse("fill", cx, cy + 10, 18, 12)
+    love.graphics.setColor(1,1,0.9,0.25)
+    love.graphics.ellipse("fill", cx-4, cy+6, 6, 4)
+
+    -- fêmur
+    roundRect(cx - 15, cy + 18, 30, 180, 10, 10, C.bone_light, C.bone_shadow)
+    -- linha áspera
+    love.graphics.setColor(C.bone_shadow[1], C.bone_shadow[2], C.bone_shadow[3], 0.35)
+    love.graphics.rectangle("fill", cx-1, cy+50, 3, 100, 1)
+    -- brilho
+    love.graphics.setColor(1,1,0.9,0.15)
+    love.graphics.rectangle("fill", cx-10, cy+22, 5, 80, 2)
+
+    -- joelho / patela
+    drawJoint(cx, cy + 200, 38, 24, C.bone_light, C.bone_dark)
+    -- patela
+    love.graphics.setColor(C.bone_light[1], C.bone_light[2], C.bone_light[3])
+    love.graphics.ellipse("fill", cx, cy+207, 8, 7)
+    love.graphics.setColor(1,1,0.9,0.3)
+    love.graphics.ellipse("fill", cx-2, cy+204, 3, 2)
+
+    -- tíbia
+    roundRect(cx - 13, cy + 226, 18, 160, 5, 5, C.bone_light, C.bone_shadow)
+    -- crista da tíbia
+    love.graphics.push()
+    love.graphics.translate(cx + 3, cy + 240)
+    love.graphics.rotate(math.rad(5))
+    love.graphics.setColor(C.bone[1], C.bone[2], C.bone[3])
+    love.graphics.rectangle("fill", 0, 0, 6, 65, 3)
+    love.graphics.pop()
+    love.graphics.setColor(1,1,0.9,0.13)
+    love.graphics.rectangle("fill", cx-10, cy+230, 4, 80, 2)
+
+    -- fíbula
+    roundRect(cx + 7, cy + 230, 9, 150, 4, 4, C.bone, C.bone_dark)
+
+    -- tornozelo
+    drawJoint(cx, cy + 388, 38, 16, C.bone_dark, C.bone)
+
+    -- pé
+    roundRect(cx - 18, cy + 406, 64, 22, 4, 8, C.bone_shadow, C.bone)
+    love.graphics.setColor(1,1,0.9,0.12)
+    love.graphics.rectangle("fill", cx-14, cy+408, 55, 6, 3)
+    -- dedos do pé
+    for i = 0, 4 do
+        local tw = (i == 0) and 10 or 8
+        local tx = cx - 18 + 66 + i * 4
+        roundRect(tx - i*2, cy + 408 + i*2, tw, 4 - i/2, 2, 2, C.bone_light, C.bone_dark)
+    end
+    -- calcanhar
+    love.graphics.setColor(C.bone_shadow[1], C.bone_shadow[2], C.bone_shadow[3])
+    love.graphics.ellipse("fill", cx - 10, cy + 416, 10, 8)
+end
+
+-- ────────────────────────────────────────────────────────────
+-- FUNDO COM TEXTURA
+-- ────────────────────────────────────────────────────────────
+local function drawBackground()
+    -- base
+    love.graphics.setColor(C.bg[1], C.bg[2], C.bg[3])
+    love.graphics.rectangle("fill", 0, 0, love.graphics.getWidth(), love.graphics.getHeight())
+
+    -- vinheta central
+    local W = love.graphics.getWidth()
+    local H = love.graphics.getHeight()
+    love.graphics.setColor(C.bg2[1], C.bg2[2], C.bg2[3], 0.6)
+    love.graphics.ellipse("fill", W/2, H/2, W*0.5, H*0.55)
+
+    -- grão
+    love.graphics.setColor(1,1,1, 0.015)
+    for _ = 1, 300 do
+        local px = math.random(0, W)
+        local py = math.random(0, H)
+        love.graphics.rectangle("fill", px, py, 1, 1)
+    end
+
+    -- rodapé
+    love.graphics.setColor(C.bone_shadow[1], C.bone_shadow[2], C.bone_shadow[3], 0.25)
+    love.graphics.printf("ESQUELETO QUADRADO", 0, H - 32, W, "center")
+end
+
+-- ────────────────────────────────────────────────────────────
+-- LÖVE CALLBACKS
+-- ────────────────────────────────────────────────────────────
+function love.load()
+    love.window.setTitle("Esqueleto Quadrado")
+    love.window.setMode(860, 960, {resizable=false, vsync=true})
+    love.graphics.setFont(love.graphics.newFont(12))
+    math.randomseed(42)
+end
+
+function love.update(dt)
+    t = t + dt
+    -- flutuação suave
+    ox = math.sin(t * 0.9) * 4 + math.sin(t * 0.4) * 2
+    oy = math.sin(t * 0.7) * 6 + math.cos(t * 0.3) * 2
+    -- respiração
+    breathe = 1 + math.sin(t * 1.2) * 0.012
+end
+
+function love.draw()
+    drawBackground()
+
+    -- centro do esqueleto
+    local CX = love.graphics.getWidth()  / 2 + ox
+    local CY = 28 + oy
+    local sc = 0.92
+
+    love.graphics.push()
+    love.graphics.translate(CX, CY)
+    love.graphics.scale(sc, sc)
+    love.graphics.translate(-CX, -CY)
+
+    -- ── BRAÇOS (atrás do tórax) ──
+    love.graphics.push()
+    love.graphics.translate(-135, 0)
+    drawArm(CX, CY + 228, "L")
+    love.graphics.pop()
+
+    love.graphics.push()
+    love.graphics.translate(135, 0)
+    drawArm(CX, CY + 228, "R")
+    love.graphics.pop()
+
+    -- ── CRÂNIO ──
+    drawSkull(CX, CY)
+
+    -- ── PESCOÇO ──
+    local neckBottom = drawNeck(CX, CY + 218)
+
+    -- ── TÓRAX (com respiração) ──
+    love.graphics.push()
+    love.graphics.translate(CX, neckBottom + (1 - breathe) * 10)
+    love.graphics.scale(breathe, 1)
+    love.graphics.translate(-CX, -(neckBottom + (1 - breathe) * 10))
+    local torsoBottom = drawTorso(CX, neckBottom + 2)
+    love.graphics.pop()
+    torsoBottom = neckBottom + 200
+
+    -- ── PELVE ──
+    drawPelvis(CX, torsoBottom)
+
+    -- ── PERNAS ──
+    local legY = torsoBottom + 85
+    drawLeg(CX - 68, legY)
+    drawLeg(CX + 35,  legY)
+
+    love.graphics.pop()
+
+    -- HUD
+    love.graphics.setColor(C.bone_shadow[1], C.bone_shadow[2], C.bone_shadow[3], 0.4)
+    love.graphics.print("LÖVE2D  |  Lua  |  ESC para sair", 14, 14)
+    love.graphics.print(string.format("FPS: %d", love.timer.getFPS()), 14, 30)
+end
+
+function love.keypressed(key)
+    if key == "escape" then love.event.quit() end
+end
